@@ -67,7 +67,7 @@ class VAE(tf.keras.Model):
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 
 # Rebuild encoder/decoder
-input_dim = 561
+input_dim = 12
 latent_dim = 32
 
 encoder_input = Input(shape=(input_dim,))
