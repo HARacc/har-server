@@ -20,7 +20,6 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
-# Класи активностей
 activity_labels = {
     0: "Ходьба",
     1: "Ходьба вгору по сходах",
@@ -134,12 +133,11 @@ def upload():
 
         feature_vec = extract_features(df)
 
-        # 🔧 Правильний спосіб — без DataFrame
         X = np.array([feature_vec])
         X_scaled = scaler.transform(X)
 
         predicted = rf_model.predict(X_scaled)[0]
-        predicted_label = activity_labels.get(int(predicted), f"Невідома дія ({predicted})")
+        predicted_label = str(predicted)
 
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
