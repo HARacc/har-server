@@ -4,8 +4,8 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
+from keras.models import load_model, Model
 from keras.layers import Input, Dense, Lambda
-from keras.models import Model, load_model
 from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
@@ -20,7 +20,7 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
-# === Telegram Notification ===
+# Telegram Notification
 def send_telegram_alert(message):
     try:
         requests.post(
@@ -30,13 +30,16 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# === Load models ===
-scaler = joblib.load("scaler.joblib")
-rf_model = joblib.load("rf_model.joblib")
+# Sampling function
+def sampling(args):
+    z_mean, z_log_var = args
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
+    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
+# Load pretrained model
 @register_keras_serializable()
 class VAE(tf.keras.Model):
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder=None, decoder=None):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -50,11 +53,33 @@ class VAE(tf.keras.Model):
 
     @classmethod
     def from_config(cls, config):
-        return cls(None, None)
+        return cls()
 
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-encoder = vae.encoder
-decoder = vae.decoder
+
+# Manually re-create encoder & decoder
+input_dim = 561
+latent_dim = 32
+
+# Encoder
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
+
+# Decoder
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
+
+# Load models
+scaler = joblib.load("scaler.joblib")
+rf_model = joblib.load("rf_model.joblib")
 
 # Load threshold
 threshold_path = Path("threshold.json")
@@ -64,12 +89,12 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-# === Feature Extraction ===
+# Feature extraction from sensor JSON
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
         for sensor in ['accelerometer', 'gyroscope']:
-            values = df[df['name'] == sensor][f'values.{axis}'].values
+            values = df[df['name'] == sensor][axis].values
             if len(values) < 128:
                 values = np.pad(values, (0, 128 - len(values)))
             features.extend([
@@ -90,21 +115,14 @@ def extract_features(df):
 def upload():
     try:
         data = request.get_json()
-        print("Отримані дані:", json.dumps(data, indent=2))
+        if data is None or 'payload' not in data:
+            return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        if "payload" not in data:
-            return jsonify({"error": "Missing 'payload' in data"}), 400
+        df = pd.json_normalize(data["payload"])
+        df = pd.concat([df.drop(['values'], axis=1), df['values'].apply(pd.Series)], axis=1)
 
-        payload = data["payload"]
-        if not isinstance(payload, list):
-            return jsonify({"error": "'payload' must be a list"}), 400
-
-        df = pd.json_normalize(payload)
-
-        required_cols = {'name', 'values.x', 'values.y', 'values.z'}
-        if not required_cols.issubset(df.columns):
-            print("Відсутні необхідні колонки:", df.columns)
-            return jsonify({"error": f"Invalid data format. Required columns: {required_cols}"}), 400
+        if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
+            return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
         feature_vec = extract_features(df)
         X = scaler.transform([feature_vec])
