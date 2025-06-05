@@ -45,7 +45,7 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-vae = load_model("vae_model_full.keras", compile=False)
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 encoder = vae.encoder
 decoder = vae.decoder
 
