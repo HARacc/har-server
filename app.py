@@ -4,7 +4,9 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import load_model
+from keras.layers import Input, Dense, Lambda
+from keras.models import Model, load_model
+from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
 import os
@@ -54,7 +56,7 @@ vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": V
 encoder = vae.encoder
 decoder = vae.decoder
 
-# === Load threshold ===
+# Load threshold
 threshold_path = Path("threshold.json")
 if threshold_path.exists():
     with open(threshold_path, "r") as f:
@@ -62,44 +64,47 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-# === Feature extraction ===
+# === Feature Extraction ===
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
         for sensor in ['accelerometer', 'gyroscope']:
-            sensor_values = df[df['name'] == sensor][f'values.{axis}'].values
-            if len(sensor_values) < 128:
-                sensor_values = np.pad(sensor_values, (0, 128 - len(sensor_values)))
+            values = df[df['name'] == sensor][f'values.{axis}'].values
+            if len(values) < 128:
+                values = np.pad(values, (0, 128 - len(values)))
             features.extend([
-                np.mean(sensor_values),
-                np.std(sensor_values),
-                np.min(sensor_values),
-                np.max(sensor_values),
-                np.median(sensor_values),
-                np.percentile(sensor_values, 25),
-                np.percentile(sensor_values, 75),
-                np.sum(sensor_values ** 2),
+                np.mean(values),
+                np.std(values),
+                np.min(values),
+                np.max(values),
+                np.median(values),
+                np.percentile(values, 25),
+                np.percentile(values, 75),
+                np.sum(values ** 2),
             ])
     while len(features) < 561:
         features.append(0.0)
     return np.array(features[:561])
 
-# === Upload endpoint ===
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
         data = request.get_json()
         print("Отримані дані:", json.dumps(data, indent=2))
 
-        if isinstance(data, dict):
-            data = [data]
+        if "payload" not in data:
+            return jsonify({"error": "Missing 'payload' in data"}), 400
 
-        df = pd.json_normalize(data)
+        payload = data["payload"]
+        if not isinstance(payload, list):
+            return jsonify({"error": "'payload' must be a list"}), 400
+
+        df = pd.json_normalize(payload)
 
         required_cols = {'name', 'values.x', 'values.y', 'values.z'}
         if not required_cols.issubset(df.columns):
             print("Відсутні необхідні колонки:", df.columns)
-            return jsonify({"error": "Invalid data format"}), 400
+            return jsonify({"error": f"Invalid data format. Required columns: {required_cols}"}), 400
 
         feature_vec = extract_features(df)
         X = scaler.transform([feature_vec])
@@ -125,7 +130,6 @@ def upload():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# === Index endpoint ===
 @app.route("/", methods=["GET"])
 def index():
     return "HAR сервер працює"
