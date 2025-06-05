@@ -101,23 +101,16 @@ else:
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
-        for sensor in ['accelerometer', 'gyroscope']:
-            values = df[df['name'] == sensor][axis].values
-            if len(values) < 128:
-                values = np.pad(values, (0, 128 - len(values)))
-            features.extend([
-                np.mean(values),
-                np.std(values),
-                np.min(values),
-                np.max(values),
-                np.median(values),
-                np.percentile(values, 25),
-                np.percentile(values, 75),
-                np.sum(values ** 2),
-            ])
-    while len(features) < 561:
-        features.append(0.0)
-    return np.array(features[:561])
+        values = df[axis].values
+        if len(values) < 128:
+            values = np.pad(values, (0, 128 - len(values)))
+        features.extend([
+            np.mean(values),
+            np.std(values),
+            np.min(values),
+            np.max(values),
+        ])
+    return np.array(features)
 
 # Main endpoint
 @app.route("/upload", methods=["POST"])
