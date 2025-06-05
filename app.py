@@ -14,14 +14,18 @@ DATA_DIR.mkdir(exist_ok=True)
 def submit():
     try:
         data = request.get_json()
-        if data is None or 'payload' not in data or 'label' not in data:
-            return jsonify({"error": "JSON must include 'payload' and 'label'"}), 400
 
-        # Ім'я файлу: timestamp_label.json
+        if data is None or 'payload' not in data:
+            return jsonify({"error": "JSON must include 'payload' key"}), 400
+
+        # Автоматично підставляємо label, якщо немає
+        label = data.get("label", "unknown").replace(" ", "_")
+
+        # Генеруємо унікальне ім’я файлу
         timestamp = int(time.time() * 1000)
-        label = data['label'].replace(" ", "_")
         filename = DATA_DIR / f"{timestamp}_{label}.json"
 
+        # Зберігаємо як є
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
