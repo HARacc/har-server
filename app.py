@@ -5,7 +5,7 @@ import joblib
 import json
 import tensorflow as tf
 from keras.layers import Input, Dense, Lambda
-from keras.models import Model, load_model
+from keras.models import Model
 from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
@@ -34,6 +34,31 @@ def send_telegram_alert(message):
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
+# === Rebuild VAE model and load weights ===
+input_dim = 561
+latent_dim = 32
+
+def sampling(args):
+    z_mean, z_log_var = args
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
+    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
+# Encoder
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
+
+# Decoder
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
+
 @register_keras_serializable()
 class VAE(tf.keras.Model):
     def __init__(self, encoder, decoder):
@@ -45,16 +70,9 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-    def get_config(self):
-        return {}
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(None, None)
-
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-encoder = vae.encoder
-decoder = vae.decoder
+vae = VAE(encoder, decoder)
+vae.compile(optimizer=Adam(learning_rate=0.0001), loss='mse', run_eagerly=True)
+vae.load_weights("vae_model.weights.h5")
 
 # Load threshold
 threshold_path = Path("threshold.json")
