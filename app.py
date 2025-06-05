@@ -4,7 +4,10 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import load_model
+from keras.layers import Input, Dense, Lambda
+from keras.models import Model, load_model
+from keras.optimizers import Adam
+from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
@@ -30,7 +33,19 @@ def send_telegram_alert(message):
 # === Load models ===
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
-vae = tf.keras.models.load_model("vae_model_full.keras", compile=False)
+
+@register_keras_serializable()
+class VAE(tf.keras.Model):
+    def __init__(self, encoder, decoder):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def call(self, inputs):
+        z_mean, z_log_var, z = self.encoder(inputs)
+        return self.decoder(z)
+
+vae = load_model("vae_model_full.keras", compile=False)
 encoder = vae.encoder
 decoder = vae.decoder
 
@@ -40,7 +55,7 @@ if threshold_path.exists():
     with open(threshold_path, "r") as f:
         threshold = json.load(f)["threshold"]
 else:
-    threshold = 0.1  # default fallback
+    threshold = 0.1
 
 # === Feature Extraction (simplified mock 561) ===
 def extract_features(df):
