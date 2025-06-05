@@ -4,8 +4,8 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
+from keras.models import load_model, Model
 from keras.layers import Input, Dense, Lambda
-from keras.models import Model
 from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
@@ -20,7 +20,7 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
-# === Telegram Notification ===
+# Telegram Notification
 def send_telegram_alert(message):
     try:
         requests.post(
@@ -30,13 +30,16 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# === Load models ===
-scaler = joblib.load("scaler.joblib")
-rf_model = joblib.load("rf_model.joblib")
+# Sampling function
+def sampling(args):
+    z_mean, z_log_var = args
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
+    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
+# Load pretrained model
 @register_keras_serializable()
 class VAE(tf.keras.Model):
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder=None, decoder=None):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -50,36 +53,33 @@ class VAE(tf.keras.Model):
 
     @classmethod
     def from_config(cls, config):
-        return cls(None, None)
+        return cls()
 
-# === Define encoder and decoder (dummy to init structure, not train) ===
-original_dim = 561
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+
+# Manually re-create encoder & decoder
+input_dim = 561
 latent_dim = 32
 
 # Encoder
-inputs = Input(shape=(original_dim,))
-h = Dense(128, activation='relu')(inputs)
-z_mean = Dense(latent_dim)(h)
-z_log_var = Dense(latent_dim)(h)
-
-def sampling(args):
-    z_mean, z_log_var = args
-    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
-    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
 z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(inputs, [z_mean, z_log_var, z], name="encoder")
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
 
 # Decoder
-latent_inputs = Input(shape=(latent_dim,))
-x = Dense(128, activation='relu')(latent_inputs)
-outputs = Dense(original_dim, activation='sigmoid')(x)
-decoder = Model(latent_inputs, outputs, name="decoder")
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
 
-vae = VAE(encoder, decoder)
-vae.compile(optimizer=Adam(learning_rate=0.0001), loss='mse')
-vae.build(input_shape=(None, 561))  # необхідно для завантаження ваг
-vae.load_weights("vae_model.weights.h5")
+# Load models
+scaler = joblib.load("scaler.joblib")
+rf_model = joblib.load("rf_model.joblib")
 
 # Load threshold
 threshold_path = Path("threshold.json")
@@ -89,20 +89,8 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-# === Feature Extraction for custom JSON ===
-def extract_features_from_payload(payload):
-    records = []
-    for item in payload:
-        if "values" in item and isinstance(item["values"], dict):
-            records.append({
-                "name": item.get("name", ""),
-                "time": item.get("time", 0),
-                "x": item["values"].get("x", 0.0),
-                "y": item["values"].get("y", 0.0),
-                "z": item["values"].get("z", 0.0),
-            })
-
-    df = pd.DataFrame(records)
+# Feature extraction from sensor JSON
+def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
         for sensor in ['accelerometer', 'gyroscope']:
@@ -127,11 +115,16 @@ def extract_features_from_payload(payload):
 def upload():
     try:
         data = request.get_json()
+        if data is None or 'payload' not in data:
+            return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        if not isinstance(data, dict) or "payload" not in data:
-            return jsonify({"error": "Missing 'payload' key"}), 400
+        df = pd.json_normalize(data["payload"])
+        df = pd.concat([df.drop(['values'], axis=1), df['values'].apply(pd.Series)], axis=1)
 
-        feature_vec = extract_features_from_payload(data["payload"])
+        if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
+            return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
+
+        feature_vec = extract_features(df)
         X = scaler.transform([feature_vec])
 
         predicted = rf_model.predict(X)[0]
