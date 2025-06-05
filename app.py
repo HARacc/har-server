@@ -6,7 +6,6 @@ import json
 import tensorflow as tf
 from keras.models import load_model, Model
 from keras.layers import Input, Dense, Lambda
-from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
 import os
@@ -19,6 +18,16 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
+
+# Класи активностей
+activity_labels = {
+    0: "Ходьба",
+    1: "Ходьба вгору по сходах",
+    2: "Ходьба вниз по сходах",
+    3: "Сидіння",
+    4: "Стояння",
+    5: "Лежання"
+}
 
 # Telegram Notification
 def send_telegram_alert(message):
@@ -118,7 +127,6 @@ def upload():
 
         df = pd.json_normalize(data["payload"], sep='_')
 
-        # Rename flattened columns
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
             df.rename(columns={
                 'values_x': 'x',
@@ -133,20 +141,25 @@ def upload():
         X = scaler.transform([feature_vec])
 
         predicted = rf_model.predict(X)[0]
+        predicted_label = activity_labels.get(int(predicted), f"Невідома дія ({predicted})")
 
         z_mean, z_log_var, z = encoder.predict(X)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X - reconstruction) ** 2)
-        is_anomaly = recon_loss > threshold
+        is_anomaly = float(recon_loss) > float(threshold)
 
         result = {
-            "predicted_activity": str(predicted),
+            "predicted_activity": predicted_label,
             "reconstruction_loss": float(recon_loss),
             "is_anomaly": bool(is_anomaly)
         }
 
         if is_anomaly:
-            send_telegram_alert(f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}")
+            send_telegram_alert(
+                f"⚠️ Аномалія виявлена!\n"
+                f"Дія: {predicted_label}\n"
+                f"Втрати реконструкції: {recon_loss:.4f}"
+            )
 
         return jsonify(result)
 
