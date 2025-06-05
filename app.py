@@ -138,15 +138,18 @@ def upload():
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
         feature_vec = extract_features(df)
-        X = scaler.transform([feature_vec])
 
-        predicted = rf_model.predict(X)[0]
+        X = pd.DataFrame([feature_vec], columns=scaler.feature_names_in_)
+        X_scaled = scaler.transform(X)
+
+        predicted = rf_model.predict(X_scaled)[0]
         predicted_label = activity_labels.get(int(predicted), f"Невідома дія ({predicted})")
 
-        z_mean, z_log_var, z = encoder.predict(X)
+        z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
-        recon_loss = np.mean((X - reconstruction) ** 2)
+        recon_loss = np.mean((X_scaled - reconstruction) ** 2)
         is_anomaly = float(recon_loss) > float(threshold)
+
 
         result = {
             "predicted_activity": predicted_label,
