@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 import numpy as np
 import pandas as pd
@@ -12,6 +11,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+import traceback
 
 load_dotenv()
 
@@ -45,7 +45,7 @@ def sampling(args):
     epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], 32))
     return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
-# Load pretrained model
+# VAE class
 @register_keras_serializable()
 class VAE(tf.keras.Model):
     def __init__(self, encoder=None, decoder=None):
@@ -64,9 +64,10 @@ class VAE(tf.keras.Model):
     def from_config(cls, config):
         return cls()
 
+# Load VAE
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 
-# Reconstruct encoder and decoder
+# Rebuild encoder/decoder
 input_dim = 561
 latent_dim = 32
 
@@ -84,7 +85,7 @@ x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-# Load scaler and RF model
+# Load scaler and classifier
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
@@ -118,6 +119,7 @@ def extract_features(df):
         features.append(0.0)
     return np.array(features[:561])
 
+# Main endpoint
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
@@ -139,7 +141,8 @@ def upload():
 
         feature_vec = extract_features(df)
 
-        X = pd.DataFrame([feature_vec], columns=scaler.feature_names_in_)
+        # 🔧 Правильний спосіб — без DataFrame
+        X = np.array([feature_vec])
         X_scaled = scaler.transform(X)
 
         predicted = rf_model.predict(X_scaled)[0]
@@ -149,7 +152,6 @@ def upload():
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
         is_anomaly = float(recon_loss) > float(threshold)
-
 
         result = {
             "predicted_activity": predicted_label,
@@ -167,6 +169,8 @@ def upload():
         return jsonify(result)
 
     except Exception as e:
+        print("❌ Помилка:", e)
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET"])
