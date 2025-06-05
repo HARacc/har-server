@@ -34,31 +34,6 @@ def send_telegram_alert(message):
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
-# === Rebuild VAE model and load weights ===
-input_dim = 561
-latent_dim = 32
-
-def sampling(args):
-    z_mean, z_log_var = args
-    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
-    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-
-# Encoder
-encoder_input = Input(shape=(input_dim,))
-x = Dense(128, activation='relu')(encoder_input)
-x = Dense(64, activation='relu')(x)
-z_mean = Dense(latent_dim)(x)
-z_log_var = Dense(latent_dim)(x)
-z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(encoder_input, [z_mean, z_log_var, z])
-
-# Decoder
-latent_input = Input(shape=(latent_dim,))
-x = Dense(64, activation='relu')(latent_input)
-x = Dense(128, activation='relu')(x)
-decoder_output = Dense(input_dim, activation='sigmoid')(x)
-decoder = Model(latent_input, decoder_output)
-
 @register_keras_serializable()
 class VAE(tf.keras.Model):
     def __init__(self, encoder, decoder):
@@ -70,8 +45,40 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
+    def get_config(self):
+        return {}
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(None, None)
+
+# === Define encoder and decoder (dummy to init structure, not train) ===
+original_dim = 561
+latent_dim = 32
+
+# Encoder
+inputs = Input(shape=(original_dim,))
+h = Dense(128, activation='relu')(inputs)
+z_mean = Dense(latent_dim)(h)
+z_log_var = Dense(latent_dim)(h)
+
+def sampling(args):
+    z_mean, z_log_var = args
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
+    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(inputs, [z_mean, z_log_var, z], name="encoder")
+
+# Decoder
+latent_inputs = Input(shape=(latent_dim,))
+x = Dense(128, activation='relu')(latent_inputs)
+outputs = Dense(original_dim, activation='sigmoid')(x)
+decoder = Model(latent_inputs, outputs, name="decoder")
+
 vae = VAE(encoder, decoder)
-vae.compile(optimizer=Adam(learning_rate=0.0001), loss='mse', run_eagerly=True)
+vae.compile(optimizer=Adam(learning_rate=0.0001), loss='mse')
+vae.build(input_shape=(None, 561))  # необхідно для завантаження ваг
 vae.load_weights("vae_model.weights.h5")
 
 # Load threshold
