@@ -30,7 +30,7 @@ def send_telegram_alert(message):
 # === Load models ===
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
-vae = load_model("vae_model_full.keras", compile=False)
+vae = tf.keras.models.load_model("vae_model_full.keras", compile=False)
 encoder = vae.encoder
 decoder = vae.decoder
 
