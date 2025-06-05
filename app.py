@@ -4,10 +4,7 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.layers import Input, Dense, Lambda
-from keras.models import Model
-from keras.optimizers import Adam
-from keras import backend as K
+from keras.models import load_model
 import requests
 import os
 from dotenv import load_dotenv
@@ -30,51 +27,12 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# === Sampling for VAE ===
-def sampling(args):
-    z_mean, z_log_var = args
-    batch = tf.shape(z_mean)[0]
-    dim = tf.shape(z_mean)[1]
-    epsilon = tf.random.normal(shape=(batch, dim))
-    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-
 # === Load models ===
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
-
-input_dim = 561
-latent_dim = 32
-
-# Encoder
-encoder_input = Input(shape=(input_dim,))
-x = Dense(128, activation='relu')(encoder_input)
-x = Dense(64, activation='relu')(x)
-z_mean = Dense(latent_dim)(x)
-z_log_var = Dense(latent_dim)(x)
-z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(encoder_input, [z_mean, z_log_var, z])
-
-# Decoder
-latent_input = Input(shape=(latent_dim,))
-x = Dense(64, activation='relu')(latent_input)
-x = Dense(128, activation='relu')(x)
-decoder_output = Dense(input_dim, activation='sigmoid')(x)
-decoder = Model(latent_input, decoder_output)
-
-# VAE Model
-class VAE(tf.keras.Model):
-    def __init__(self, encoder, decoder):
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-
-    def call(self, inputs):
-        z_mean, z_log_var, z = self.encoder(inputs)
-        return self.decoder(z)
-
-vae = VAE(encoder, decoder)
-vae.compile(optimizer=Adam(learning_rate=0.0001), loss=tf.keras.losses.MeanSquaredError(), run_eagerly=True)
-vae.load_weights("vae_model.weights.h5")
+vae = load_model("vae_model_full.keras", compile=False)
+encoder = vae.encoder
+decoder = vae.decoder
 
 # Load threshold
 threshold_path = Path("threshold.json")
@@ -102,7 +60,6 @@ def extract_features(df):
                 np.percentile(values, 75),
                 np.sum(values ** 2),
             ])
-    # Repeat until length = 561 (mock fill)
     while len(features) < 561:
         features.append(0.0)
     return np.array(features[:561])
@@ -119,10 +76,8 @@ def upload():
         feature_vec = extract_features(df)
         X = scaler.transform([feature_vec])
 
-        # Predict class
         predicted = rf_model.predict(X)[0]
 
-        # Anomaly detection
         z_mean, z_log_var, z = encoder.predict(X)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X - reconstruction) ** 2)
