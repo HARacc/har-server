@@ -64,19 +64,15 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-# === Feature Extraction (supports nested values from Sensor Logger) ===
-def extract_features(records):
-    df = pd.json_normalize(records, sep='_')
-
-    if not {'name', 'values_x', 'values_y', 'values_z'}.issubset(df.columns):
-        raise ValueError("Invalid format: required keys not found")
-
+# === Feature Extraction ===
+def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
         for sensor in ['accelerometer', 'gyroscope']:
-            values = df[df['name'] == sensor][f'values_{axis}'].values
+            col = f'values.{axis}'
+            values = df[df['name'] == sensor][col].dropna().values
             if len(values) < 128:
-                values = np.pad(values, (0, 128 - len(values)), mode='constant')
+                values = np.pad(values, (0, 128 - len(values)))
             features.extend([
                 np.mean(values),
                 np.std(values),
@@ -87,20 +83,21 @@ def extract_features(records):
                 np.percentile(values, 75),
                 np.sum(values ** 2),
             ])
-
     while len(features) < 561:
         features.append(0.0)
-
     return np.array(features[:561])
 
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
         data = request.get_json()
-        if not isinstance(data, list):
-            return jsonify({"error": "Expected a list of sensor records"}), 400
+        df = pd.json_normalize(data)
 
-        feature_vec = extract_features(data)
+        required_cols = {'name', 'values.x', 'values.y', 'values.z'}
+        if not required_cols.issubset(df.columns):
+            return jsonify({"error": "Invalid data format"}), 400
+
+        feature_vec = extract_features(df)
         X = scaler.transform([feature_vec])
 
         predicted = rf_model.predict(X)[0]
@@ -117,7 +114,7 @@ def upload():
         }
 
         if is_anomaly:
-            send_telegram_alert(f"\u26a0\ufe0f Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}")
+            send_telegram_alert(f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}")
 
         return jsonify(result)
 
