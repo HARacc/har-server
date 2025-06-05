@@ -6,6 +6,7 @@ import json
 import tensorflow as tf
 from keras.layers import Input, Dense, Lambda
 from keras.models import Model, load_model
+from keras.optimizers import Adam
 from keras.utils import register_keras_serializable
 import requests
 import os
@@ -19,6 +20,7 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
+# === Telegram Notification ===
 def send_telegram_alert(message):
     try:
         requests.post(
@@ -34,7 +36,7 @@ rf_model = joblib.load("rf_model.joblib")
 
 @register_keras_serializable()
 class VAE(tf.keras.Model):
-    def __init__(self, encoder=None, decoder=None):
+    def __init__(self, encoder, decoder):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -48,7 +50,7 @@ class VAE(tf.keras.Model):
 
     @classmethod
     def from_config(cls, config):
-        return cls()
+        return cls(None, None)
 
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 encoder = vae.encoder
@@ -62,7 +64,20 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-def extract_features(df):
+# === Feature Extraction for custom JSON ===
+def extract_features_from_payload(payload):
+    records = []
+    for item in payload:
+        if "values" in item and isinstance(item["values"], dict):
+            records.append({
+                "name": item.get("name", ""),
+                "time": item.get("time", 0),
+                "x": item["values"].get("x", 0.0),
+                "y": item["values"].get("y", 0.0),
+                "z": item["values"].get("z", 0.0),
+            })
+
+    df = pd.DataFrame(records)
     features = []
     for axis in ['x', 'y', 'z']:
         for sensor in ['accelerometer', 'gyroscope']:
@@ -87,21 +102,11 @@ def extract_features(df):
 def upload():
     try:
         data = request.get_json()
-        if data is None or 'payload' not in data:
-            return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        df = pd.json_normalize(data["payload"])
+        if not isinstance(data, dict) or "payload" not in data:
+            return jsonify({"error": "Missing 'payload' key"}), 400
 
-        if 'values' not in df.columns:
-            return jsonify({"error": "Payload items must contain 'values' field"}), 400
-
-        values_df = df['values'].apply(pd.Series)
-        df = pd.concat([df.drop(columns=['values']), values_df], axis=1)
-
-        if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
-            return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
-
-        feature_vec = extract_features(df)
+        feature_vec = extract_features_from_payload(data["payload"])
         X = scaler.transform([feature_vec])
 
         predicted = rf_model.predict(X)[0]
