@@ -57,11 +57,10 @@ class VAE(tf.keras.Model):
 
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 
-# Manually re-create encoder & decoder
+# Reconstruct encoder and decoder
 input_dim = 561
 latent_dim = 32
 
-# Encoder
 encoder_input = Input(shape=(input_dim,))
 x = Dense(128, activation='relu')(encoder_input)
 x = Dense(64, activation='relu')(x)
@@ -70,14 +69,13 @@ z_log_var = Dense(latent_dim)(x)
 z = Lambda(sampling)([z_mean, z_log_var])
 encoder = Model(encoder_input, [z_mean, z_log_var, z])
 
-# Decoder
 latent_input = Input(shape=(latent_dim,))
 x = Dense(64, activation='relu')(latent_input)
 x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-# Load models
+# Load scaler and RF model
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
@@ -89,7 +87,7 @@ if threshold_path.exists():
 else:
     threshold = 0.1
 
-# Feature extraction from sensor JSON
+# Feature extraction
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
@@ -118,8 +116,15 @@ def upload():
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        df = pd.json_normalize(data["payload"])
-        df = pd.concat([df.drop(['values'], axis=1), df['values'].apply(pd.Series)], axis=1)
+        df = pd.json_normalize(data["payload"], sep='_')
+
+        # Rename flattened columns
+        if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
+            df.rename(columns={
+                'values_x': 'x',
+                'values_y': 'y',
+                'values_z': 'z'
+            }, inplace=True)
 
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
