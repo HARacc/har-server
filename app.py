@@ -53,11 +53,7 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-
 scaler = joblib.load("scaler.joblib")
-rf_model = joblib.load("rf_model.joblib")
-
 input_dim = scaler.n_features_in_
 latent_dim = 32
 
@@ -74,6 +70,9 @@ x = Dense(64, activation='relu')(latent_input)
 x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
+
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+rf_model = joblib.load("rf_model.joblib")
 
 def get_threshold():
     try:
