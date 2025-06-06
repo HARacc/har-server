@@ -12,6 +12,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 import traceback
+import gdown  # 🔽 додано
 
 load_dotenv()
 
@@ -27,6 +28,21 @@ activity_labels = {
     3: "Сидіння",
     4: "Стояння"
 }
+
+# 🔽 Автозавантаження RandomForest-моделі з Google Drive
+MODEL_PATH = "rf_model.joblib"
+GDRIVE_FILE_ID = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
+
+def download_rf_model():
+    if not os.path.exists(MODEL_PATH):
+        url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+        print("🔽 Завантаження моделі з Google Drive...")
+        gdown.download(url, MODEL_PATH, quiet=False)
+    else:
+        print("✅ Модель вже існує локально")
+
+download_rf_model()
+# 🔼
 
 def send_telegram_alert(message):
     try:
@@ -80,7 +96,7 @@ vae.build(input_shape=(None, input_dim))
 vae.load_weights("vae_model.weights.h5")
 
 # === Модель класифікації
-rf_model = joblib.load("rf_model.joblib")
+rf_model = joblib.load(MODEL_PATH)
 
 def get_threshold():
     try:
