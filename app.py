@@ -54,10 +54,11 @@ class VAE(tf.keras.Model):
         return self.decoder(z)
 
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
-input_dim = scaler.mean_.shape[0]
+input_dim = scaler.n_features_in_
 latent_dim = 32
 
 encoder_input = Input(shape=(input_dim,))
