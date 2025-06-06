@@ -21,10 +21,8 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 vae = None
-scaler = None
 rf_model = None
-encoder = None
-decoder = None
+scaler = None
 
 activity_labels = {
     0: "Ходьба",
@@ -69,28 +67,45 @@ def download_model():
     url = f"https://drive.google.com/uc?id={file_id}"
     gdown.download(url, output, quiet=False)
 
+# Завантаження RF моделі перед запитом (але не при старті)
 download_model()
 
-scaler = joblib.load("scaler.joblib")
-input_dim = scaler.n_features_in_
-latent_dim = 32
+def get_scaler():
+    global scaler
+    if scaler is None:
+        scaler = joblib.load("scaler.joblib")
+    return scaler
 
-encoder_input = Input(shape=(input_dim,))
-x = Dense(128, activation='relu')(encoder_input)
-x = Dense(64, activation='relu')(x)
-z_mean = Dense(latent_dim)(x)
-z_log_var = Dense(latent_dim)(x)
-z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(encoder_input, [z_mean, z_log_var, z])
+def get_rf_model():
+    global rf_model
+    if rf_model is None:
+        rf_model = joblib.load("rf_model.joblib")
+    return rf_model
 
-latent_input = Input(shape=(latent_dim,))
-x = Dense(64, activation='relu')(latent_input)
-x = Dense(128, activation='relu')(x)
-decoder_output = Dense(input_dim, activation='sigmoid')(x)
-decoder = Model(latent_input, decoder_output)
+def get_vae():
+    global vae
+    if vae is None:
+        print("📦 Завантаження VAE...")
+        vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+    return vae
 
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-rf_model = joblib.load("rf_model.joblib")
+# Створення енкодера і декодера (їх ми не завантажуємо, а будували вручну)
+def build_encoder_decoder(input_dim, latent_dim):
+    encoder_input = Input(shape=(input_dim,))
+    x = Dense(128, activation='relu')(encoder_input)
+    x = Dense(64, activation='relu')(x)
+    z_mean = Dense(latent_dim)(x)
+    z_log_var = Dense(latent_dim)(x)
+    z = Lambda(sampling)([z_mean, z_log_var])
+    encoder = Model(encoder_input, [z_mean, z_log_var, z])
+
+    latent_input = Input(shape=(latent_dim,))
+    x = Dense(64, activation='relu')(latent_input)
+    x = Dense(128, activation='relu')(x)
+    decoder_output = Dense(input_dim, activation='sigmoid')(x)
+    decoder = Model(latent_input, decoder_output)
+
+    return encoder, decoder
 
 def get_threshold():
     try:
@@ -142,10 +157,16 @@ def upload():
 
         feature_vec = extract_features(df)
         X = np.array([feature_vec])
+        scaler = get_scaler()
         X_scaled = scaler.transform(X)
 
+        rf_model = get_rf_model()
         predicted = rf_model.predict(X_scaled)[0]
         predicted_label = str(predicted)
+
+        input_dim = scaler.n_features_in_
+        latent_dim = 32
+        encoder, decoder = build_encoder_decoder(input_dim, latent_dim)
 
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
