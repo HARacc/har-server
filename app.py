@@ -4,25 +4,21 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import Model, load_model
+from keras.models import load_model, Model
 from keras.layers import Input, Dense, Lambda
 from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
-import traceback
-import gdown
 from pathlib import Path
+import traceback
 
-app = Flask(__name__)
 load_dotenv()
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-vae = None
-rf_model = None
-scaler = None
+app = Flask(__name__)
 
 activity_labels = {
     0: "Ходьба",
@@ -57,64 +53,26 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-def download_model():
-    output = "rf_model.joblib"
-    if Path(output).is_file() and os.path.getsize(output) > 1_000_000:
-        print("✅ rf_model.joblib вже існує.")
-        return
-    print("🔽 Завантаження rf_model.joblib з Google Drive...")
-    file_id = "1dkc-O5Th3-W5xPdVjsNsKQMXTGSP3oH2"
-    url = f"https://drive.google.com/uc?id={file_id}"
-    gdown.download(url, output, quiet=False)
+scaler = joblib.load("scaler.joblib")
+input_dim = scaler.n_features_in_
+latent_dim = 32
 
-download_model()
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
 
-def get_scaler():
-    global scaler
-    if scaler is None:
-        path = "scaler.joblib"
-        abs_path = os.path.abspath(path)
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
 
-        # 🔥 Стерти старий файл (тільки якщо дуже треба)
-        # if os.path.exists(path):
-        #     os.remove(path)
-        #     print(f"❌ Видалено старий scaler.joblib: {abs_path}")
-
-        print(f"📦 Спроба завантажити scaler.joblib з: {abs_path}")
-        scaler = joblib.load(path)
-        print(f"✅ Завантажено scaler. Очікує {scaler.n_features_in_} фіч.")
-    return scaler
-
-def get_rf_model():
-    global rf_model
-    if rf_model is None:
-        print("📦 Завантаження RandomForest з rf_model.joblib")
-        rf_model = joblib.load("rf_model.joblib")
-    return rf_model
-
-def get_vae():
-    global vae
-    if vae is None:
-        print("📦 Завантаження VAE з vae_model_full.keras")
-        vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-    return vae
-
-def build_encoder_decoder(input_dim, latent_dim):
-    encoder_input = Input(shape=(input_dim,))
-    x = Dense(128, activation='relu')(encoder_input)
-    x = Dense(64, activation='relu')(x)
-    z_mean = Dense(latent_dim)(x)
-    z_log_var = Dense(latent_dim)(x)
-    z = Lambda(sampling)([z_mean, z_log_var])
-    encoder = Model(encoder_input, [z_mean, z_log_var, z])
-
-    latent_input = Input(shape=(latent_dim,))
-    x = Dense(64, activation='relu')(latent_input)
-    x = Dense(128, activation='relu')(x)
-    decoder_output = Dense(input_dim, activation='sigmoid')(x)
-    decoder = Model(latent_input, decoder_output)
-
-    return encoder, decoder
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+rf_model = joblib.load("rf_model.joblib")
 
 def get_threshold():
     try:
@@ -124,14 +82,21 @@ def get_threshold():
         return 0.3
 
 def extract_features(df):
-    def energy(x): return np.sum(x ** 2)
-    def mad(x): return np.median(np.abs(x - np.median(x)))
+    def energy(x):
+        return np.sum(x ** 2)
+
+    def mad(x):
+        return np.median(np.abs(x - np.median(x)))
+
     def coeff_var(x):
         mean = np.mean(x)
         return np.std(x) / mean if mean != 0 else 0
-    def max_jerk(x): return np.max(np.abs(np.diff(x)))
+
+    def max_jerk(x):
+        return np.max(np.abs(np.diff(x)))
 
     features = []
+
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
         for axis in ['x', 'y', 'z']:
@@ -139,10 +104,14 @@ def extract_features(df):
             if len(values) < 128:
                 values = np.pad(values, (0, 128 - len(values)))
             features.extend([
-                np.mean(values), np.std(values),
-                np.min(values), np.max(values),
-                mad(values), energy(values),
-                coeff_var(values), max_jerk(values)
+                np.mean(values),
+                np.std(values),
+                np.min(values),
+                np.max(values),
+                mad(values),
+                energy(values),
+                coeff_var(values),
+                max_jerk(values)
             ])
     return np.array(features)
 
@@ -166,25 +135,10 @@ def upload():
 
         feature_vec = extract_features(df)
         X = np.array([feature_vec])
-
-        print(f"🔍 Форма ознак: {X.shape}")
-
-        scaler = get_scaler()
-        if X.shape[1] != scaler.n_features_in_:
-            return jsonify({
-                "error": f"❌ Розмірність фіч ({X.shape[1]}) ≠ scaler.n_features_in_ ({scaler.n_features_in_}). "
-                         f"Шлях: {os.path.abspath('scaler.joblib')}"
-            }), 500
-
         X_scaled = scaler.transform(X)
 
-        rf_model = get_rf_model()
         predicted = rf_model.predict(X_scaled)[0]
         predicted_label = str(predicted)
-
-        input_dim = scaler.n_features_in_
-        latent_dim = 32
-        encoder, decoder = build_encoder_decoder(input_dim, latent_dim)
 
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
