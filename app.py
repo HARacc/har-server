@@ -4,7 +4,7 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import load_model, Model
+from keras.models import Model
 from keras.layers import Input, Dense, Lambda
 from keras.utils import register_keras_serializable
 import requests
@@ -53,10 +53,12 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
+# === Загрузка скейлера
 scaler = joblib.load("scaler.joblib")
 input_dim = scaler.n_features_in_
 latent_dim = 32
 
+# === Побудова енкодера
 encoder_input = Input(shape=(input_dim,))
 x = Dense(128, activation='relu')(encoder_input)
 x = Dense(64, activation='relu')(x)
@@ -65,13 +67,19 @@ z_log_var = Dense(latent_dim)(x)
 z = Lambda(sampling)([z_mean, z_log_var])
 encoder = Model(encoder_input, [z_mean, z_log_var, z])
 
+# === Побудова декодера
 latent_input = Input(shape=(latent_dim,))
 x = Dense(64, activation='relu')(latent_input)
 x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+# === Ініціалізація і завантаження ваг
+vae = VAE(encoder=encoder, decoder=decoder)
+vae.build(input_shape=(None, input_dim))
+vae.load_weights("vae_model.weights.h5")
+
+# === Модель класифікації
 rf_model = joblib.load("rf_model.joblib")
 
 def get_threshold():
@@ -82,21 +90,14 @@ def get_threshold():
         return 0.3
 
 def extract_features(df):
-    def energy(x):
-        return np.sum(x ** 2)
-
-    def mad(x):
-        return np.median(np.abs(x - np.median(x)))
-
+    def energy(x): return np.sum(x ** 2)
+    def mad(x): return np.median(np.abs(x - np.median(x)))
     def coeff_var(x):
         mean = np.mean(x)
         return np.std(x) / mean if mean != 0 else 0
-
-    def max_jerk(x):
-        return np.max(np.abs(np.diff(x)))
+    def max_jerk(x): return np.max(np.abs(np.diff(x)))
 
     features = []
-
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
         for axis in ['x', 'y', 'z']:
@@ -104,14 +105,10 @@ def extract_features(df):
             if len(values) < 128:
                 values = np.pad(values, (0, 128 - len(values)))
             features.extend([
-                np.mean(values),
-                np.std(values),
-                np.min(values),
-                np.max(values),
-                mad(values),
-                energy(values),
-                coeff_var(values),
-                max_jerk(values)
+                np.mean(values), np.std(values),
+                np.min(values), np.max(values),
+                mad(values), energy(values),
+                coeff_var(values), max_jerk(values)
             ])
     return np.array(features)
 
