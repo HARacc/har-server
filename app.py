@@ -12,6 +12,7 @@ import os
 from dotenv import load_dotenv
 import traceback
 import gdown
+from pathlib import Path
 
 app = Flask(__name__)
 load_dotenv()
@@ -59,42 +60,38 @@ class VAE(tf.keras.Model):
         return self.decoder(z)
 
 def download_model():
+    output = "rf_model.joblib"
+    if Path(output).is_file() and os.path.getsize(output) > 1_000_000:
+        print("✅ rf_model.joblib вже існує.")
+        return
+    print("🔽 Завантаження rf_model.joblib з Google Drive...")
     file_id = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
     url = f"https://drive.google.com/uc?id={file_id}"
-    output = "rf_model.joblib"
-    if not os.path.exists(output):
-        print("🔽 Завантаження rf_model.joblib з Google Drive...")
-        gdown.download(url, output, quiet=False)
-    else:
-        print("✅ rf_model.joblib вже існує.")
+    gdown.download(url, output, quiet=False)
 
-def load_models():
-    global vae, scaler, rf_model, encoder, decoder
+download_model()
 
-    if vae is not None and rf_model is not None and scaler is not None:
-        return
+scaler = joblib.load("scaler.joblib")
+input_dim = scaler.n_features_in_
+latent_dim = 32
 
-    download_model()
-    scaler = joblib.load("scaler.joblib")
-    input_dim = scaler.n_features_in_
-    latent_dim = 32
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
 
-    encoder_input = Input(shape=(input_dim,))
-    x = Dense(128, activation='relu')(encoder_input)
-    x = Dense(64, activation='relu')(x)
-    z_mean = Dense(latent_dim)(x)
-    z_log_var = Dense(latent_dim)(x)
-    z = Lambda(sampling)([z_mean, z_log_var])
-    encoder = Model(encoder_input, [z_mean, z_log_var, z])
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
 
-    latent_input = Input(shape=(latent_dim,))
-    x = Dense(64, activation='relu')(latent_input)
-    x = Dense(128, activation='relu')(x)
-    decoder_output = Dense(input_dim, activation='sigmoid')(x)
-    decoder = Model(latent_input, decoder_output)
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+rf_model = joblib.load("rf_model.joblib")
 
-    vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-    rf_model = joblib.load("rf_model.joblib")
 def get_threshold():
     try:
         with open("threshold.json", "r") as f:
@@ -128,8 +125,6 @@ def extract_features(df):
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
-        load_models()
-
         data = request.get_json()
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
