@@ -4,33 +4,28 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import Model, load_model
+from keras.models import Model
 from keras.layers import Input, Dense, Lambda
 from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
-from pathlib import Path
 import traceback
-import gdown
 
-# Завантаження моделі з Google Drive, якщо її немає
-def download_model():
-    file_id = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
-    url = f"https://drive.google.com/uc?id={file_id}"
-    output = "rf_model.joblib"
-    if not os.path.exists(output):
-        print("🔽 Завантаження rf_model.joblib з Google Drive...")
-        gdown.download(url, output, quiet=False)
-    else:
-        print("✅ rf_model.joblib вже існує.")
-
+# === Завантаження змінних середовища
 load_dotenv()
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
+
+# === Глобальні змінні для моделей
+vae = None
+encoder = None
+decoder = None
+rf_model = None
+scaler = None
 
 activity_labels = {
     0: "Ходьба",
@@ -65,33 +60,43 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-# === Завантаження скейлера і моделі
-scaler = joblib.load("scaler.joblib")
-input_dim = scaler.n_features_in_
-latent_dim = 32
+@app.before_first_request
+def load_models():
+    global vae, encoder, decoder, rf_model, scaler
 
-# === Побудова енкодера
-encoder_input = Input(shape=(input_dim,))
-x = Dense(128, activation='relu')(encoder_input)
-x = Dense(64, activation='relu')(x)
-z_mean = Dense(latent_dim)(x)
-z_log_var = Dense(latent_dim)(x)
-z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(encoder_input, [z_mean, z_log_var, z])
+    print("⏳ Завантаження моделей при першому запиті...")
+    
+    scaler = joblib.load("scaler.joblib")
+    input_dim = scaler.n_features_in_
+    latent_dim = 32
 
-# === Побудова декодера
-latent_input = Input(shape=(latent_dim,))
-x = Dense(64, activation='relu')(latent_input)
-x = Dense(128, activation='relu')(x)
-decoder_output = Dense(input_dim, activation='sigmoid')(x)
-decoder = Model(latent_input, decoder_output)
+    encoder_input = Input(shape=(input_dim,))
+    x = Dense(128, activation='relu')(encoder_input)
+    x = Dense(64, activation='relu')(x)
+    z_mean = Dense(latent_dim)(x)
+    z_log_var = Dense(latent_dim)(x)
+    z = Lambda(sampling)([z_mean, z_log_var])
+    encoder_local = Model(encoder_input, [z_mean, z_log_var, z])
 
-# === Завантаження повної моделі VAE
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+    latent_input = Input(shape=(latent_dim,))
+    x = Dense(64, activation='relu')(latent_input)
+    x = Dense(128, activation='relu')(x)
+    decoder_output = Dense(input_dim, activation='sigmoid')(x)
+    decoder_local = Model(latent_input, decoder_output)
 
-# === Завантаження Random Forest
-download_model()
-rf_model = joblib.load("rf_model.joblib")
+    vae_local = VAE(encoder=encoder_local, decoder=decoder_local)
+    vae_local.compile(run_eagerly=True)
+    vae_local.build(input_shape=(None, input_dim))
+    vae_local.load_weights("vae_model.weights.h5")
+
+    rf_model_local = joblib.load("rf_model.joblib")
+
+    encoder = encoder_local
+    decoder = decoder_local
+    vae = vae_local
+    rf_model = rf_model_local
+
+    print("✅ Моделі завантажено.")
 
 def get_threshold():
     try:
