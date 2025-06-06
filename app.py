@@ -50,7 +50,7 @@ class VAE(tf.keras.Model):
 # === Завантаження моделей ===
 scaler = joblib.load("scaler.joblib")
 vae = load_model("vae_model_full.keras", custom_objects={"VAE": VAE}, compile=False)
-rf_model = joblib.load("rf_model_light.joblib")  # Сюди збережи легку версію RF
+rf_model = joblib.load("rf_model.joblib")
 
 # === Параметри вхідних даних ===
 input_dim = scaler.n_features_in_
