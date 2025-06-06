@@ -63,7 +63,7 @@ def download_model():
         print("✅ rf_model.joblib вже існує.")
         return
     print("🔽 Завантаження rf_model.joblib з Google Drive...")
-    file_id = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
+    file_id = "1dkc-O5Th3-W5xPdVjsNsKQMXTGSP3oH2"
     url = f"https://drive.google.com/uc?id={file_id}"
     gdown.download(url, output, quiet=False)
 
@@ -72,18 +72,23 @@ download_model()
 def get_scaler():
     global scaler
     if scaler is None:
-        scaler = joblib.load("scaler.joblib")
+        path = "scaler.joblib"
+        print(f"📦 Завантаження scaler з: {path}")
+        scaler = joblib.load(path)
+        print(f"✅ scaler.n_features_in_ = {scaler.n_features_in_}")
     return scaler
 
 def get_rf_model():
     global rf_model
     if rf_model is None:
+        print("📦 Завантаження RandomForest з rf_model.joblib")
         rf_model = joblib.load("rf_model.joblib")
     return rf_model
 
 def get_vae():
     global vae
     if vae is None:
+        print("📦 Завантаження VAE з vae_model_full.keras")
         vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
     return vae
 
@@ -155,11 +160,13 @@ def upload():
         feature_vec = extract_features(df)
         X = np.array([feature_vec])
 
+        print(f"🔍 Форма X: {X.shape}")
+
         scaler = get_scaler()
         if X.shape[1] != scaler.n_features_in_:
             return jsonify({
                 "error": f"❌ Розмірність фіч ({X.shape[1]}) не збігається з очікуваною scaler ({scaler.n_features_in_}). "
-                         f"Можливо, треба оновити scaler.joblib."
+                         f"Можливо, не оновлений scaler.joblib або features.csv."
             }), 500
 
         X_scaled = scaler.transform(X)
