@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from pathlib import Path
 import traceback
 
-# --- Завантаження .env ---
 load_dotenv()
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -21,7 +20,6 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
-# --- Класифікація дій ---
 activity_labels = {
     0: "Ходьба",
     1: "Ходьба вгору по сходах",
@@ -30,7 +28,6 @@ activity_labels = {
     4: "Стояння"
 }
 
-# --- Telegram сповіщення ---
 def send_telegram_alert(message):
     try:
         requests.post(
@@ -40,13 +37,11 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# --- Sampling для VAE ---
 def sampling(args):
     z_mean, z_log_var = args
     epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], 32))
     return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
-# --- Клас VAE ---
 @register_keras_serializable()
 class VAE(tf.keras.Model):
     def __init__(self, encoder=None, decoder=None, **kwargs):
@@ -58,10 +53,11 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-# --- Завантаження моделей ---
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+scaler = joblib.load("scaler.joblib")
+rf_model = joblib.load("rf_model.joblib")
 
-input_dim = 12 
+input_dim = scaler.mean_.shape[0]
 latent_dim = 32
 
 encoder_input = Input(shape=(input_dim,))
@@ -78,10 +74,6 @@ x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-scaler = joblib.load("scaler.joblib")
-rf_model = joblib.load("rf_model.joblib")
-
-# --- Читання порогу ---
 def get_threshold():
     try:
         with open("threshold.json", "r") as f:
@@ -89,7 +81,6 @@ def get_threshold():
     except:
         return 0.3
 
-# --- Обробка JSON з сенсорів ---
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
@@ -102,9 +93,8 @@ def extract_features(df):
             np.min(values),
             np.max(values),
         ])
-    return np.array(features) 
+    return np.array(features)
 
-# --- Основна точка прийому даних ---
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
@@ -156,7 +146,6 @@ def upload():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# --- Оновлення порогу через API ---
 @app.route("/update_threshold", methods=["POST"])
 def update_threshold():
     try:
@@ -168,11 +157,9 @@ def update_threshold():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# --- Стартова сторінка ---
 @app.route("/", methods=["GET"])
 def index():
     return "HAR сервер працює"
 
-# --- Запуск ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
