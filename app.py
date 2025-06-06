@@ -82,17 +82,37 @@ def get_threshold():
         return 0.3
 
 def extract_features(df):
+    def energy(x):
+        return np.sum(x ** 2)
+
+    def mad(x):
+        return np.median(np.abs(x - np.median(x)))
+
+    def coeff_var(x):
+        mean = np.mean(x)
+        return np.std(x) / mean if mean != 0 else 0
+
+    def max_jerk(x):
+        return np.max(np.abs(np.diff(x)))
+
     features = []
-    for axis in ['x', 'y', 'z']:
-        values = df[axis].values
-        if len(values) < 128:
-            values = np.pad(values, (0, 128 - len(values)))
-        features.extend([
-            np.mean(values),
-            np.std(values),
-            np.min(values),
-            np.max(values),
-        ])
+
+    for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
+        sensor_df = df[df['name'] == sensor]
+        for axis in ['x', 'y', 'z']:
+            values = sensor_df[axis].values.astype(float)
+            if len(values) < 128:
+                values = np.pad(values, (0, 128 - len(values)))
+            features.extend([
+                np.mean(values),
+                np.std(values),
+                np.min(values),
+                np.max(values),
+                mad(values),
+                energy(values),
+                coeff_var(values),
+                max_jerk(values)
+            ])
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
