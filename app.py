@@ -73,9 +73,16 @@ def get_scaler():
     global scaler
     if scaler is None:
         path = "scaler.joblib"
-        print(f"📦 Завантаження scaler з: {path}")
+        abs_path = os.path.abspath(path)
+
+        # 🔥 Стерти старий файл (тільки якщо дуже треба)
+        # if os.path.exists(path):
+        #     os.remove(path)
+        #     print(f"❌ Видалено старий scaler.joblib: {abs_path}")
+
+        print(f"📦 Спроба завантажити scaler.joblib з: {abs_path}")
         scaler = joblib.load(path)
-        print(f"✅ scaler.n_features_in_ = {scaler.n_features_in_}")
+        print(f"✅ Завантажено scaler. Очікує {scaler.n_features_in_} фіч.")
     return scaler
 
 def get_rf_model():
@@ -160,13 +167,13 @@ def upload():
         feature_vec = extract_features(df)
         X = np.array([feature_vec])
 
-        print(f"🔍 Форма X: {X.shape}")
+        print(f"🔍 Форма ознак: {X.shape}")
 
         scaler = get_scaler()
         if X.shape[1] != scaler.n_features_in_:
             return jsonify({
-                "error": f"❌ Розмірність фіч ({X.shape[1]}) не збігається з очікуваною scaler ({scaler.n_features_in_}). "
-                         f"Можливо, не оновлений scaler.joblib або features.csv."
+                "error": f"❌ Розмірність фіч ({X.shape[1]}) ≠ scaler.n_features_in_ ({scaler.n_features_in_}). "
+                         f"Шлях: {os.path.abspath('scaler.joblib')}"
             }), 500
 
         X_scaled = scaler.transform(X)
