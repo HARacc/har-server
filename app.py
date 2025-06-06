@@ -4,16 +4,16 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.layers import Input, Dense, Lambda
 from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
-from pathlib import Path
 import traceback
-import gdown  # 🔽 додано
+import gdown
 
+# === Завантаження змінних середовища
 load_dotenv()
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -29,33 +29,29 @@ activity_labels = {
     4: "Стояння"
 }
 
-# 🔽 Автозавантаження RandomForest-моделі з Google Drive
+# === Автозавантаження Random Forest моделі з Google Drive
 MODEL_PATH = "rf_model.joblib"
 GDRIVE_FILE_ID = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
 
 def download_rf_model():
     if not os.path.exists(MODEL_PATH):
         url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
-        print("🔽 Завантаження моделі з Google Drive...")
+        print("🔽 Завантаження rf_model.joblib з Google Drive...")
         gdown.download(url, MODEL_PATH, quiet=False)
     else:
-        print("✅ Модель вже існує локально")
+        print("✅ Random Forest модель вже існує")
 
 download_rf_model()
-# 🔼
 
-def send_telegram_alert(message):
-    try:
-        requests.post(
-            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
-            json={'chat_id': CHAT_ID, 'text': message}
-        )
-    except Exception as e:
-        print(f"Telegram error: {e}")
+# === Завантаження scaler
+scaler = joblib.load("scaler.joblib")
+input_dim = scaler.n_features_in_
+latent_dim = 32
 
+# === Sampling та кастомна модель VAE
 def sampling(args):
     z_mean, z_log_var = args
-    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], 32))
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], latent_dim))
     return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
 @register_keras_serializable()
@@ -69,35 +65,15 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-# === Загрузка скейлера
-scaler = joblib.load("scaler.joblib")
-input_dim = scaler.n_features_in_
-latent_dim = 32
+# === Завантаження повної VAE моделі
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+encoder = vae.encoder
+decoder = vae.decoder
 
-# === Побудова енкодера
-encoder_input = Input(shape=(input_dim,))
-x = Dense(128, activation='relu')(encoder_input)
-x = Dense(64, activation='relu')(x)
-z_mean = Dense(latent_dim)(x)
-z_log_var = Dense(latent_dim)(x)
-z = Lambda(sampling)([z_mean, z_log_var])
-encoder = Model(encoder_input, [z_mean, z_log_var, z])
-
-# === Побудова декодера
-latent_input = Input(shape=(latent_dim,))
-x = Dense(64, activation='relu')(latent_input)
-x = Dense(128, activation='relu')(x)
-decoder_output = Dense(input_dim, activation='sigmoid')(x)
-decoder = Model(latent_input, decoder_output)
-
-# === Ініціалізація і завантаження ваг
-vae = VAE(encoder=encoder, decoder=decoder)
-vae.build(input_shape=(None, input_dim))
-vae.load_weights("vae_model.weights.h5")
-
-# === Модель класифікації
+# === Завантаження класифікатора
 rf_model = joblib.load(MODEL_PATH)
 
+# === Поріг реконструкції
 def get_threshold():
     try:
         with open("threshold.json", "r") as f:
@@ -105,6 +81,7 @@ def get_threshold():
     except:
         return 0.3
 
+# === Обробка сенсорних даних
 def extract_features(df):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
@@ -128,6 +105,17 @@ def extract_features(df):
             ])
     return np.array(features)
 
+# === Telegram сповіщення
+def send_telegram_alert(message):
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
+            json={'chat_id': CHAT_ID, 'text': message}
+        )
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+# === Основний маршрут обробки
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
@@ -179,6 +167,7 @@ def upload():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+# === Оновлення порогу вручну
 @app.route("/update_threshold", methods=["POST"])
 def update_threshold():
     try:
