@@ -67,7 +67,6 @@ def download_model():
     url = f"https://drive.google.com/uc?id={file_id}"
     gdown.download(url, output, quiet=False)
 
-# Завантаження RF моделі перед запитом (але не при старті)
 download_model()
 
 def get_scaler():
@@ -85,11 +84,9 @@ def get_rf_model():
 def get_vae():
     global vae
     if vae is None:
-        print("📦 Завантаження VAE...")
         vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
     return vae
 
-# Створення енкодера і декодера (їх ми не завантажуємо, а будували вручну)
 def build_encoder_decoder(input_dim, latent_dim):
     encoder_input = Input(shape=(input_dim,))
     x = Dense(128, activation='relu')(encoder_input)
@@ -157,7 +154,14 @@ def upload():
 
         feature_vec = extract_features(df)
         X = np.array([feature_vec])
+
         scaler = get_scaler()
+        if X.shape[1] != scaler.n_features_in_:
+            return jsonify({
+                "error": f"❌ Розмірність фіч ({X.shape[1]}) не збігається з очікуваною scaler ({scaler.n_features_in_}). "
+                         f"Можливо, треба оновити scaler.joblib."
+            }), 500
+
         X_scaled = scaler.transform(X)
 
         rf_model = get_rf_model()
@@ -204,8 +208,7 @@ def update_threshold():
         return jsonify({"message": f"Threshold updated to {threshold}"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-print("Shape of X before scaling:", X.shape)
-print("Scaler expects:", get_scaler().n_features_in_)
+
 @app.route("/", methods=["GET"])
 def index():
     return "HAR сервер працює"
