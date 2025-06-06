@@ -204,7 +204,8 @@ def update_threshold():
         return jsonify({"message": f"Threshold updated to {threshold}"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-
+print("Shape of X before scaling:", X.shape)
+print("Scaler expects:", get_scaler().n_features_in_)
 @app.route("/", methods=["GET"])
 def index():
     return "HAR сервер працює"
