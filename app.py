@@ -4,13 +4,26 @@ import pandas as pd
 import joblib
 import json
 import tensorflow as tf
-from keras.models import load_model
+from keras.models import Model, load_model
+from keras.layers import Input, Dense, Lambda
 from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
 from pathlib import Path
 import traceback
+import gdown
+
+# Завантаження моделі з Google Drive, якщо її немає
+def download_model():
+    file_id = "1pXrOAzE9UQ0ssdfAI3_JvImwY3OlURJp"
+    url = f"https://drive.google.com/uc?id={file_id}"
+    output = "rf_model.joblib"
+    if not os.path.exists(output):
+        print("🔽 Завантаження rf_model.joblib з Google Drive...")
+        gdown.download(url, output, quiet=False)
+    else:
+        print("✅ rf_model.joblib вже існує.")
 
 load_dotenv()
 
@@ -36,6 +49,11 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
+def sampling(args):
+    z_mean, z_log_var = args
+    epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], 32))
+    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
 @register_keras_serializable()
 class VAE(tf.keras.Model):
     def __init__(self, encoder=None, decoder=None, **kwargs):
@@ -47,14 +65,33 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-# === Завантаження моделей ===
+# === Завантаження скейлера і моделі
 scaler = joblib.load("scaler.joblib")
-vae = load_model("vae_model_full.keras", custom_objects={"VAE": VAE}, compile=False)
-rf_model = joblib.load("rf_model.joblib")
-
-# === Параметри вхідних даних ===
 input_dim = scaler.n_features_in_
 latent_dim = 32
+
+# === Побудова енкодера
+encoder_input = Input(shape=(input_dim,))
+x = Dense(128, activation='relu')(encoder_input)
+x = Dense(64, activation='relu')(x)
+z_mean = Dense(latent_dim)(x)
+z_log_var = Dense(latent_dim)(x)
+z = Lambda(sampling)([z_mean, z_log_var])
+encoder = Model(encoder_input, [z_mean, z_log_var, z])
+
+# === Побудова декодера
+latent_input = Input(shape=(latent_dim,))
+x = Dense(64, activation='relu')(latent_input)
+x = Dense(128, activation='relu')(x)
+decoder_output = Dense(input_dim, activation='sigmoid')(x)
+decoder = Model(latent_input, decoder_output)
+
+# === Завантаження повної моделі VAE
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+
+# === Завантаження Random Forest
+download_model()
+rf_model = joblib.load("rf_model.joblib")
 
 def get_threshold():
     try:
@@ -111,8 +148,8 @@ def upload():
         predicted = rf_model.predict(X_scaled)[0]
         predicted_label = str(predicted)
 
-        z_mean, z_log_var, z = vae.encoder.predict(X_scaled)
-        reconstruction = vae.decoder.predict(z)
+        z_mean, z_log_var, z = encoder.predict(X_scaled)
+        reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
 
         threshold = get_threshold()
