@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import traceback
 
+# --- Завантаження .env ---
 load_dotenv()
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -20,6 +21,7 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 app = Flask(__name__)
 
+# --- Класифікація дій ---
 activity_labels = {
     0: "Ходьба",
     1: "Ходьба вгору по сходах",
@@ -28,7 +30,7 @@ activity_labels = {
     4: "Стояння"
 }
 
-# Telegram Notification
+# --- Telegram сповіщення ---
 def send_telegram_alert(message):
     try:
         requests.post(
@@ -38,17 +40,17 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Sampling function
+# --- Sampling для VAE ---
 def sampling(args):
     z_mean, z_log_var = args
     epsilon = tf.random.normal(shape=(tf.shape(z_mean)[0], 32))
     return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
-# VAE class
+# --- Клас VAE ---
 @register_keras_serializable()
 class VAE(tf.keras.Model):
-    def __init__(self, encoder=None, decoder=None):
-        super().__init__()
+    def __init__(self, encoder=None, decoder=None, **kwargs):
+        super().__init__(**kwargs)
         self.encoder = encoder
         self.decoder = decoder
 
@@ -56,18 +58,10 @@ class VAE(tf.keras.Model):
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)
 
-    def get_config(self):
-        return {}
-
-    @classmethod
-    def from_config(cls, config):
-        return cls()
-
-# Load VAE
+# --- Завантаження моделей ---
 vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
 
-# Rebuild encoder/decoder
-input_dim = 12
+input_dim = 12 
 latent_dim = 32
 
 encoder_input = Input(shape=(input_dim,))
@@ -84,19 +78,18 @@ x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-# Load scaler and classifier
 scaler = joblib.load("scaler.joblib")
 rf_model = joblib.load("rf_model.joblib")
 
-# Load threshold
-threshold_path = Path("threshold.json")
-if threshold_path.exists():
-    with open(threshold_path, "r") as f:
-        threshold = json.load(f)["threshold"]
-else:
-    threshold = 0.1
+# --- Читання порогу ---
+def get_threshold():
+    try:
+        with open("threshold.json", "r") as f:
+            return float(json.load(f)["threshold"])
+    except:
+        return 0.3
 
-# Feature extraction
+# --- Обробка JSON з сенсорів ---
 def extract_features(df):
     features = []
     for axis in ['x', 'y', 'z']:
@@ -109,9 +102,9 @@ def extract_features(df):
             np.min(values),
             np.max(values),
         ])
-    return np.array(features)
+    return np.array(features) 
 
-# Main endpoint
+# --- Основна точка прийому даних ---
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
@@ -120,7 +113,6 @@ def upload():
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
         df = pd.json_normalize(data["payload"], sep='_')
-
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
             df.rename(columns={
                 'values_x': 'x',
@@ -132,7 +124,6 @@ def upload():
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
         feature_vec = extract_features(df)
-
         X = np.array([feature_vec])
         X_scaled = scaler.transform(X)
 
@@ -142,7 +133,9 @@ def upload():
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
-        is_anomaly = float(recon_loss) > float(threshold)
+
+        threshold = get_threshold()
+        is_anomaly = recon_loss > threshold
 
         result = {
             "predicted_activity": predicted_label,
@@ -160,13 +153,26 @@ def upload():
         return jsonify(result)
 
     except Exception as e:
-        print("❌ Помилка:", e)
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+# --- Оновлення порогу через API ---
+@app.route("/update_threshold", methods=["POST"])
+def update_threshold():
+    try:
+        data = request.get_json()
+        threshold = float(data.get("threshold"))
+        with open("threshold.json", "w") as f:
+            json.dump({"threshold": threshold}, f)
+        return jsonify({"message": f"Threshold updated to {threshold}"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# --- Стартова сторінка ---
 @app.route("/", methods=["GET"])
 def index():
     return "HAR сервер працює"
 
+# --- Запуск ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
