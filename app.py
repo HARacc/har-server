@@ -54,6 +54,9 @@ class VAE(tf.keras.Model):
         return self.decoder(z)
 
 scaler = joblib.load("scaler.joblib")
+vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
+rf_model = joblib.load("rf_model.joblib")
+
 input_dim = scaler.n_features_in_
 latent_dim = 32
 
@@ -71,9 +74,6 @@ x = Dense(128, activation='relu')(x)
 decoder_output = Dense(input_dim, activation='sigmoid')(x)
 decoder = Model(latent_input, decoder_output)
 
-vae = load_model("vae_model_full.keras", compile=False, custom_objects={"VAE": VAE})
-rf_model = joblib.load("rf_model.joblib")
-
 def get_threshold():
     try:
         with open("threshold.json", "r") as f:
@@ -84,32 +84,31 @@ def get_threshold():
 def extract_features(df):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
-    def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
+    def coeff_var(x):
+        mean = np.mean(x)
+        return np.std(x) / mean if mean != 0 else 0
     def max_jerk(x): return np.max(np.abs(np.diff(x)))
+    def iqr(x): return np.percentile(x, 75) - np.percentile(x, 25)
+    def rms(x): return np.sqrt(np.mean(x ** 2))
+    def zcross(x): return np.sum(np.diff(np.sign(x)) != 0)
 
     features = []
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
         for axis in ['x', 'y', 'z']:
             values = sensor_df[axis].values.astype(float)
-            if len(values) < 128:
-                values = np.pad(values, (0, 128 - len(values)))
+            values = np.pad(values, (0, max(0, 128 - len(values))))
             features.extend([
-                np.mean(values),
-                np.std(values),
-                np.min(values),
-                np.max(values),
-                np.ptp(values),
-                mad(values),
-                energy(values),
-                coeff_var(values),
-                max_jerk(values),
-                np.percentile(values, 75) - np.percentile(values, 25),
-                np.sqrt(np.mean(values ** 2)),
-                np.sum(np.diff(np.sign(values)) != 0),
-                pd.Series(values).skew(),
-                pd.Series(values).kurt()
+                np.mean(values), np.std(values), np.min(values), np.max(values),
+                np.ptp(values), mad(values), energy(values), coeff_var(values),
+                max_jerk(values), iqr(values), rms(values), zcross(values),
+                pd.Series(values).skew(), pd.Series(values).kurt()
             ])
+        norm = np.sqrt(np.sum(sensor_df[['x', 'y', 'z']].astype(float) ** 2, axis=1))
+        norm = np.pad(norm, (0, max(0, 128 - len(norm))))
+        features.extend([
+            np.mean(norm), np.std(norm), rms(norm), mad(norm)
+        ])
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
@@ -121,43 +120,33 @@ def upload():
 
         df = pd.json_normalize(data["payload"], sep='_')
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
-            df.rename(columns={
-                'values_x': 'x',
-                'values_y': 'y',
-                'values_z': 'z'
-            }, inplace=True)
+            df.rename(columns={'values_x': 'x', 'values_y': 'y', 'values_z': 'z'}, inplace=True)
 
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
         feature_vec = extract_features(df)
-        X = np.array([feature_vec])
-        X_scaled = scaler.transform(X)
+        if len(feature_vec) != scaler.n_features_in_:
+            return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler is expecting {scaler.n_features_in_} features as input."}), 400
 
+        X_scaled = scaler.transform([feature_vec])
         predicted = rf_model.predict(X_scaled)[0]
-        predicted_label = str(predicted)
-
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
-
         threshold = get_threshold()
         is_anomaly = recon_loss > threshold
 
-        result = {
-            "predicted_activity": predicted_label,
-            "reconstruction_loss": float(recon_loss),
-            "is_anomaly": bool(is_anomaly)
-        }
-
         if is_anomaly:
             send_telegram_alert(
-                f"⚠️ Аномалія виявлена!\n"
-                f"Дія: {predicted_label}\n"
-                f"Втрати реконструкції: {recon_loss:.4f}"
+                f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}"
             )
 
-        return jsonify(result)
+        return jsonify({
+            "predicted_activity": str(predicted),
+            "reconstruction_loss": float(recon_loss),
+            "is_anomaly": bool(is_anomaly)
+        })
 
     except Exception as e:
         traceback.print_exc()
