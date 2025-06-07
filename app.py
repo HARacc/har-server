@@ -91,47 +91,25 @@ def extract_features(df):
     def iqr(x): return np.percentile(x, 75) - np.percentile(x, 25)
     def rms(x): return np.sqrt(np.mean(x ** 2))
     def zcross(x): return np.sum(np.diff(np.sign(x)) != 0)
-    def spec_energy(x):
-        fft = np.abs(np.fft.fft(x))[:len(x)//2]
-        return np.sum(fft ** 2) / len(fft)
-    def dom_freq(x):
-        fft = np.abs(np.fft.fft(x))[:len(x)//2]
-        return np.argmax(fft)
-    def peaks(x):
-        return np.sum((x[1:-1] > x[:-2]) & (x[1:-1] > x[2:]))
 
     features = []
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
         for axis in ['x', 'y', 'z']:
             values = sensor_df[axis].values.astype(float)
-            values = np.pad(values, (0, max(0, 128 - len(values))))
+            values = np.pad(values, (0, max(0, 128 - len(values))), mode='constant')
             features.extend([
                 np.mean(values), np.std(values), np.min(values), np.max(values),
                 np.ptp(values), mad(values), energy(values), coeff_var(values),
                 max_jerk(values), iqr(values), rms(values), zcross(values),
-                pd.Series(values).skew(), pd.Series(values).kurt(),
-                spec_energy(values), dom_freq(values), peaks(values)
+                pd.Series(values).skew(), pd.Series(values).kurt()
             ])
-        norm = np.sqrt(np.sum(sensor_df[['x', 'y', 'z']].astype(float) ** 2, axis=1))
-        norm = np.pad(norm, (0, max(0, 128 - len(norm))))
+        norm = np.linalg.norm(sensor_df[['x', 'y', 'z']].astype(float).values, axis=1)
+        norm = np.pad(norm, (0, max(0, 128 - len(norm))), mode='constant')
         features.extend([
             np.mean(norm), np.std(norm), rms(norm), mad(norm)
         ])
-        # Кореляції
-        try:
-            corr_xy = sensor_df['x'].corr(sensor_df['y'])
-            corr_yz = sensor_df['y'].corr(sensor_df['z'])
-            corr_xz = sensor_df['x'].corr(sensor_df['z'])
-        except:
-            corr_xy, corr_yz, corr_xz = 0, 0, 0
-        features.extend([corr_xy, corr_yz, corr_xz])
-        # Кут нахилу
-        tilt = np.degrees(np.arccos(sensor_df['z'].astype(float) / (norm + 1e-8)))
-        tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
-        features.extend([np.mean(tilt), np.std(tilt)])
     return np.array(features)
-
 
 @app.route("/upload", methods=["POST"])
 def upload():
