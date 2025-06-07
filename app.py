@@ -82,21 +82,12 @@ def get_threshold():
         return 0.3
 
 def extract_features(df):
-    def energy(x):
-        return np.sum(x ** 2)
-
-    def mad(x):
-        return np.median(np.abs(x - np.median(x)))
-
-    def coeff_var(x):
-        mean = np.mean(x)
-        return np.std(x) / mean if mean != 0 else 0
-
-    def max_jerk(x):
-        return np.max(np.abs(np.diff(x)))
+    def energy(x): return np.sum(x ** 2)
+    def mad(x): return np.median(np.abs(x - np.median(x)))
+    def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
+    def max_jerk(x): return np.max(np.abs(np.diff(x)))
 
     features = []
-
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
         for axis in ['x', 'y', 'z']:
@@ -108,10 +99,16 @@ def extract_features(df):
                 np.std(values),
                 np.min(values),
                 np.max(values),
+                np.ptp(values),
                 mad(values),
                 energy(values),
                 coeff_var(values),
-                max_jerk(values)
+                max_jerk(values),
+                np.percentile(values, 75) - np.percentile(values, 25),
+                np.sqrt(np.mean(values ** 2)),
+                np.sum(np.diff(np.sign(values)) != 0),
+                pd.Series(values).skew(),
+                pd.Series(values).kurt()
             ])
     return np.array(features)
 
