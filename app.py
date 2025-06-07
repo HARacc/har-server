@@ -10,7 +10,6 @@ from keras.utils import register_keras_serializable
 import requests
 import os
 from dotenv import load_dotenv
-from pathlib import Path
 import traceback
 
 load_dotenv()
@@ -81,7 +80,7 @@ def get_threshold():
     except:
         return 0.3
 
-def extract_features(df):
+def extract_features(df, lat=0.0, lon=0.0):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
     def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
@@ -104,31 +103,29 @@ def extract_features(df):
                 np.mean(values), np.std(values), np.min(values), np.max(values),
                 np.ptp(values), mad(values), energy(values), coeff_var(values),
                 max_jerk(values), iqr(values), rms(values), zcross(values),
-                s.skew(), s.kurt(),  # 13, 14
-                np.sum(values ** 2) / len(values)  # spectral_energy (approx)
+                s.skew(), s.kurt(),
+                np.sum(values ** 2) / len(values),
+                np.argmax(np.abs(np.fft.rfft(values))),
+                len(np.where((values[1:-1] > values[:-2]) & (values[1:-1] > values[2:]))[0])
             ])
 
-            # Домінантна частота та кількість піків — як заглушки
-            features.append(np.argmax(np.abs(np.fft.rfft(values))))  # dom_freq
-            features.append(len(np.where((values[1:-1] > values[:-2]) & (values[1:-1] > values[2:]))[0]))  # peaks
-
-        # norm
         norm = np.sqrt(np.sum(sensor_df[['x', 'y', 'z']].astype(float).values**2, axis=1))
         norm = np.pad(norm, (0, max(0, 128 - len(norm))))
         features.extend([np.mean(norm), np.std(norm), rms(norm), mad(norm)])
 
-        # Кореляції
         for pair in [('x', 'y'), ('y', 'z'), ('x', 'z')]:
             x = sensor_df[pair[0]].astype(float).values
             y = sensor_df[pair[1]].astype(float).values
             corr = np.corrcoef(x[:len(y)], y[:len(x)])[0, 1] if len(x) and len(y) else 0
             features.append(corr)
 
-        # "Tilt" (mean & std по відношенню осі до горизонту)
         tilt = np.arctan2(sensor_df['z'].astype(float), 
                           np.sqrt(sensor_df['x'].astype(float) ** 2 + sensor_df['y'].astype(float) ** 2))
         tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
         features.extend([np.mean(tilt), np.std(tilt)])
+
+    # Додати GPS координати
+    features.extend([lat, lon])
 
     return np.array(features)
 
@@ -139,6 +136,9 @@ def upload():
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
+        lat = data.get("location", {}).get("lat", 0.0)
+        lon = data.get("location", {}).get("lon", 0.0)
+
         df = pd.json_normalize(data["payload"], sep='_')
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
             df.rename(columns={'values_x': 'x', 'values_y': 'y', 'values_z': 'z'}, inplace=True)
@@ -146,7 +146,7 @@ def upload():
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
-        feature_vec = extract_features(df)
+        feature_vec = extract_features(df, lat=lat, lon=lon)
         if len(feature_vec) != scaler.n_features_in_:
             return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler is expecting {scaler.n_features_in_} features as input."}), 400
 
@@ -160,7 +160,7 @@ def upload():
 
         if is_anomaly:
             send_telegram_alert(
-                f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}"
+                f"\u26a0\ufe0f Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}"
             )
 
         return jsonify({
