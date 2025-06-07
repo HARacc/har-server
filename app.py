@@ -159,9 +159,13 @@ def upload():
         is_anomaly = recon_loss > threshold
 
         if is_anomaly:
-            send_telegram_alert(
-                f"\u26a0\ufe0f Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}"
-            )
+        send_telegram_alert(
+            f"\u26a0\ufe0f Аномалія виявлена!\n"
+            f"Дія: {predicted}\n"
+            f"Втрати реконструкції: {recon_loss:.4f}\n"
+            f"GPS: {lat:.5f}, {lon:.5f}"
+        )
+
 
         return jsonify({
             "predicted_activity": str(predicted),
