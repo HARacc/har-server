@@ -167,6 +167,8 @@ def upload():
             "predicted_activity": str(predicted),
             "reconstruction_loss": float(recon_loss),
             "is_anomaly": bool(is_anomaly)
+            "gps_lat": lat,
+            "gps_lon": lon
         })
 
     except Exception as e:
