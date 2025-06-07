@@ -12,6 +12,8 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 import traceback
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 load_dotenv()
 
