@@ -136,8 +136,15 @@ def upload():
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        lat = data.get("location", {}).get("lat", 0.0)
-        lon = data.get("location", {}).get("lon", 0.0)
+        # Витяг GPS з payload
+        lat = 0.0
+        lon = 0.0
+        for row in data["payload"]:
+            if row.get("name") == "location":
+                values = row.get("values", {})
+                lat = values.get("latitude", 0.0)
+                lon = values.get("longitude", 0.0)
+                break
 
         df = pd.json_normalize(data["payload"], sep='_')
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
@@ -160,19 +167,13 @@ def upload():
 
         if is_anomaly:
             send_telegram_alert(
-                f"\u26a0\ufe0f Аномалія виявлена!\n"
-                f"Дія: {predicted}\n"
-                f"Втрати реконструкції: {recon_loss:.4f}\n"
-                f"GPS: {lat:.5f}, {lon:.5f}"
-        )
-
+                f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}\nGPS: {lat:.5f}, {lon:.5f}"
+            )
 
         return jsonify({
             "predicted_activity": str(predicted),
             "reconstruction_loss": float(recon_loss),
-            "is_anomaly": bool(is_anomaly),
-            "gps_lat": lat,
-            "gps_lon": lon
+            "is_anomaly": bool(is_anomaly)
         })
 
     except Exception as e:
