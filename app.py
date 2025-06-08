@@ -133,14 +133,12 @@ def upload():
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        # Витяг GPS з payload
         lat = 0.0
         lon = 0.0
         for row in data["payload"]:
-            if row.get("name") == "location":
-                values = row.get("values", {})
-                lat = values.get("latitude", 0.0)
-                lon = values.get("longitude", 0.0)
+            if row.get("name") == "location" and isinstance(row.get("values"), dict):
+                lat = row["values"].get("latitude", 0.0)
+                lon = row["values"].get("longitude", 0.0)
                 break
 
         df = pd.json_normalize(data["payload"], sep='_')
@@ -152,10 +150,10 @@ def upload():
 
         feature_vec = extract_features(df)
         if len(feature_vec) != scaler.n_features_in_:
-            return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler is expecting {scaler.n_features_in_} features as input."}), 400
+            return jsonify({"error": f"X has {len(feature_vec)} features, but expected {scaler.n_features_in_}."}), 400
 
         X_scaled = scaler.transform([feature_vec])
-        predicted = rf_model.predict(X_scaled)[0]
+        predicted_label = rf_model.predict(X_scaled)[0]
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
@@ -164,11 +162,11 @@ def upload():
 
         if is_anomaly:
             send_telegram_alert(
-                f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}\nGPS: {lat:.5f}, {lon:.5f}"
+                f"⚠️ Аномалія виявлена!\nДія: {predicted_label}\nВтрати реконструкції: {recon_loss:.4f}\nGPS: {lat:.5f}, {lon:.5f}"
             )
 
         return jsonify({
-            "predicted_activity": str(predicted),
+            "predicted_activity": str(predicted_label),
             "reconstruction_loss": float(recon_loss),
             "is_anomaly": bool(is_anomaly),
             "gps": {"lat": lat, "lon": lon}
