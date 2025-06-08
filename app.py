@@ -17,10 +17,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# === Глобальні змінні для GPS ===
-last_lat = 0.0
-last_lon = 0.0
-
 app = Flask(__name__)
 
 activity_labels = {
@@ -30,6 +26,9 @@ activity_labels = {
     3: "Сидіння",
     4: "Стояння"
 }
+
+last_lat = 0.0
+last_lon = 0.0
 
 def send_telegram_alert(message):
     try:
@@ -84,7 +83,7 @@ def get_threshold():
     except:
         return 0.3
 
-def extract_features(df, lat=0.0, lon=0.0):
+def extract_features(df):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
     def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
@@ -128,28 +127,29 @@ def extract_features(df, lat=0.0, lon=0.0):
         tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
         features.extend([np.mean(tilt), np.std(tilt)])
 
-    features.extend([lat, lon])
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    global last_lat, last_lon
     try:
-        global last_lat, last_lon
-
         data = request.get_json()
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        lat = last_lat
-        lon = last_lon
+        # Витяг GPS з payload
+        lat, lon = None, None
         for row in data["payload"]:
             if row.get("name") == "location":
                 values = row.get("values", {})
-                lat = values.get("latitude", last_lat)
-                lon = values.get("longitude", last_lon)
-                last_lat = lat
-                last_lon = lon
+                lat = values.get("latitude", None)
+                lon = values.get("longitude", None)
                 break
+
+        if lat is not None and lon is not None:
+            last_lat, last_lon = lat, lon
+        else:
+            lat, lon = last_lat, last_lon
 
         df = pd.json_normalize(data["payload"], sep='_')
         if {'values_x', 'values_y', 'values_z'}.issubset(df.columns):
@@ -158,7 +158,7 @@ def upload():
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
-        feature_vec = extract_features(df, lat=lat, lon=lon)
+        feature_vec = extract_features(df)
         if len(feature_vec) != scaler.n_features_in_:
             return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler expects {scaler.n_features_in_}"}), 400
 
@@ -179,7 +179,10 @@ def upload():
             "predicted_activity": str(predicted),
             "reconstruction_loss": float(recon_loss),
             "is_anomaly": bool(is_anomaly),
-            "gps": {"lat": lat, "lon": lon}
+            "gps": {
+                "lat": lat,
+                "lon": lon
+            }
         })
 
     except Exception as e:
