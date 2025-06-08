@@ -80,7 +80,7 @@ def get_threshold():
     except:
         return 0.3
 
-def extract_features(df, lat=0.0, lon=0.0):
+def extract_features(df):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
     def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
@@ -124,9 +124,6 @@ def extract_features(df, lat=0.0, lon=0.0):
         tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
         features.extend([np.mean(tilt), np.std(tilt)])
 
-    # Додати GPS координати
-    features.extend([lat, lon])
-
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
@@ -153,7 +150,7 @@ def upload():
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
-        feature_vec = extract_features(df, lat=lat, lon=lon)
+        feature_vec = extract_features(df)
         if len(feature_vec) != scaler.n_features_in_:
             return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler is expecting {scaler.n_features_in_} features as input."}), 400
 
@@ -173,7 +170,8 @@ def upload():
         return jsonify({
             "predicted_activity": str(predicted),
             "reconstruction_loss": float(recon_loss),
-            "is_anomaly": bool(is_anomaly)
+            "is_anomaly": bool(is_anomaly),
+            "gps": {"lat": lat, "lon": lon}
         })
 
     except Exception as e:
