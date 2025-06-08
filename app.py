@@ -17,6 +17,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+# === Глобальні змінні для GPS ===
+last_lat = 0.0
+last_lon = 0.0
+
 app = Flask(__name__)
 
 activity_labels = {
@@ -80,7 +84,7 @@ def get_threshold():
     except:
         return 0.3
 
-def extract_features(df):
+def extract_features(df, lat=0.0, lon=0.0):
     def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
     def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
@@ -124,21 +128,27 @@ def extract_features(df):
         tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
         features.extend([np.mean(tilt), np.std(tilt)])
 
+    features.extend([lat, lon])
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
+        global last_lat, last_lon
+
         data = request.get_json()
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        lat = 0.0
-        lon = 0.0
+        lat = last_lat
+        lon = last_lon
         for row in data["payload"]:
-            if row.get("name") == "location" and isinstance(row.get("values"), dict):
-                lat = row["values"].get("latitude", 0.0)
-                lon = row["values"].get("longitude", 0.0)
+            if row.get("name") == "location":
+                values = row.get("values", {})
+                lat = values.get("latitude", last_lat)
+                lon = values.get("longitude", last_lon)
+                last_lat = lat
+                last_lon = lon
                 break
 
         df = pd.json_normalize(data["payload"], sep='_')
@@ -148,12 +158,12 @@ def upload():
         if not {'x', 'y', 'z', 'name'}.issubset(df.columns):
             return jsonify({"error": f"Missing required keys. Got: {df.columns.tolist()}"}), 400
 
-        feature_vec = extract_features(df)
+        feature_vec = extract_features(df, lat=lat, lon=lon)
         if len(feature_vec) != scaler.n_features_in_:
-            return jsonify({"error": f"X has {len(feature_vec)} features, but expected {scaler.n_features_in_}."}), 400
+            return jsonify({"error": f"X has {len(feature_vec)} features, but MinMaxScaler expects {scaler.n_features_in_}"}), 400
 
         X_scaled = scaler.transform([feature_vec])
-        predicted_label = rf_model.predict(X_scaled)[0]
+        predicted = rf_model.predict(X_scaled)[0]
         z_mean, z_log_var, z = encoder.predict(X_scaled)
         reconstruction = decoder.predict(z)
         recon_loss = np.mean((X_scaled - reconstruction) ** 2)
@@ -162,11 +172,11 @@ def upload():
 
         if is_anomaly:
             send_telegram_alert(
-                f"⚠️ Аномалія виявлена!\nДія: {predicted_label}\nВтрати реконструкції: {recon_loss:.4f}\nGPS: {lat:.5f}, {lon:.5f}"
+                f"⚠️ Аномалія виявлена!\nДія: {predicted}\nВтрати реконструкції: {recon_loss:.4f}\nGPS: {lat:.5f}, {lon:.5f}"
             )
 
         return jsonify({
-            "predicted_activity": str(predicted_label),
+            "predicted_activity": str(predicted),
             "reconstruction_loss": float(recon_loss),
             "is_anomaly": bool(is_anomaly),
             "gps": {"lat": lat, "lon": lon}
