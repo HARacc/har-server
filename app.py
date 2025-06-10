@@ -84,48 +84,40 @@ def get_threshold():
         return 0.3
 
 def extract_features(df):
-    def energy(x): return np.sum(x ** 2)
     def mad(x): return np.median(np.abs(x - np.median(x)))
-    def coeff_var(x): return np.std(x) / np.mean(x) if np.mean(x) != 0 else 0
-    def max_jerk(x): return np.max(np.abs(np.diff(x))) if len(x) > 1 else 0
     def iqr(x): return np.percentile(x, 75) - np.percentile(x, 25)
     def rms(x): return np.sqrt(np.mean(x ** 2))
-    def zcross(x): return np.sum(np.diff(np.sign(x)) != 0)
 
     features = []
+    important_axes = {
+        'accelerometeruncalibrated_z': ['std', 'range', 'mad', 'iqr'],
+        'gyroscopeuncalibrated_x': ['std', 'rms', 'range', 'mad', 'iqr']
+    }
 
     for sensor in ['accelerometeruncalibrated', 'gyroscopeuncalibrated']:
         sensor_df = df[df['name'] == sensor]
+        if sensor_df.empty:
+            continue
 
         for axis in ['x', 'y', 'z']:
-            values = sensor_df[axis].values.astype(float)
-            values = np.pad(values, (0, max(0, 128 - len(values))))
-            s = pd.Series(values)
+            values = sensor_df[axis].astype(float).values
+            key = f"{sensor}_{axis}"
+            if key in important_axes:
+                if 'std' in important_axes[key]:
+                    features.append(np.std(values))
+                if 'range' in important_axes[key]:
+                    features.append(np.ptp(values))
+                if 'mad' in important_axes[key]:
+                    features.append(mad(values))
+                if 'iqr' in important_axes[key]:
+                    features.append(iqr(values))
+                if 'rms' in important_axes[key]:
+                    features.append(rms(values))
 
-            features.extend([
-                np.mean(values), np.std(values), np.min(values), np.max(values),
-                np.ptp(values), mad(values), energy(values), coeff_var(values),
-                max_jerk(values), iqr(values), rms(values), zcross(values),
-                s.skew(), s.kurt(),
-                np.sum(values ** 2) / len(values),
-                np.argmax(np.abs(np.fft.rfft(values))),
-                len(np.where((values[1:-1] > values[:-2]) & (values[1:-1] > values[2:]))[0])
-            ])
-
-        norm = np.sqrt(np.sum(sensor_df[['x', 'y', 'z']].astype(float).values**2, axis=1))
-        norm = np.pad(norm, (0, max(0, 128 - len(norm))))
-        features.extend([np.mean(norm), np.std(norm), rms(norm), mad(norm)])
-
-        for pair in [('x', 'y'), ('y', 'z'), ('x', 'z')]:
-            x = sensor_df[pair[0]].astype(float).values
-            y = sensor_df[pair[1]].astype(float).values
-            corr = np.corrcoef(x[:len(y)], y[:len(x)])[0, 1] if len(x) and len(y) else 0
-            features.append(corr)
-
-        tilt = np.arctan2(sensor_df['z'].astype(float), 
-                          np.sqrt(sensor_df['x'].astype(float) ** 2 + sensor_df['y'].astype(float) ** 2))
-        tilt = np.pad(tilt, (0, max(0, 128 - len(tilt))))
-        features.extend([np.mean(tilt), np.std(tilt)])
+        norm = np.sqrt(np.sum(sensor_df[['x', 'y', 'z']].astype(float).values ** 2, axis=1))
+        features.append(rms(norm))
+        features.append(np.mean(norm))
+        features.append(np.std(norm))
 
     return np.array(features)
 
