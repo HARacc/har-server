@@ -119,6 +119,10 @@ def extract_features(df):
         features.append(np.mean(norm))
         features.append(np.std(norm))
 
+    # ➕ Паддінг якщо не вистачає ознак
+    while len(features) < scaler.n_features_in_:
+        features.append(0.0)
+
     return np.array(features)
 
 @app.route("/upload", methods=["POST"])
