@@ -119,7 +119,6 @@ def extract_features(df):
         features.append(np.mean(norm))
         features.append(np.std(norm))
 
-    # ➕ Паддінг якщо не вистачає ознак
     while len(features) < scaler.n_features_in_:
         features.append(0.0)
 
@@ -133,7 +132,6 @@ def upload():
         if data is None or 'payload' not in data:
             return jsonify({"error": "JSON must include 'payload' key"}), 400
 
-        # Витяг GPS з payload
         lat, lon = None, None
         for row in data["payload"]:
             if row.get("name") == "location":
